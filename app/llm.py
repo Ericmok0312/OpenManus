@@ -2,7 +2,6 @@ from typing import Dict, List, Literal, Optional, Union
 
 from openai import (
     APIError,
-    AsyncOpenAI,
     AuthenticationError,
     OpenAIError,
     RateLimitError,
@@ -12,6 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 from app.config import LLMSettings, config
 from app.logger import logger  # Assuming a logger is set up in your app
 from app.schema import Message
+from together import AsyncTogether
 
 
 class LLM:
@@ -35,48 +35,27 @@ class LLM:
             self.model = llm_config.model
             self.max_tokens = llm_config.max_tokens
             self.temperature = llm_config.temperature
-            self.client = AsyncOpenAI(
-                api_key=llm_config.api_key, base_url=llm_config.base_url
-            )
+            if llm_config.provider == "openai":
+                self.client = AsyncOpenAI(
+                    api_key=llm_config.api_key, base_url=llm_config.base_url
+                )
+            elif llm_config.provider == "together":
+                self.client = AsyncTogether(api_key=llm_config.api_key, model=self.model, temperature=self.temperature, max_tokens=self.max_tokens)
 
     @staticmethod
     def format_messages(messages: List[Union[dict, Message]]) -> List[dict]:
-        """
-        Format messages for LLM by converting them to OpenAI message format.
-
-        Args:
-            messages: List of messages that can be either dict or Message objects
-
-        Returns:
-            List[dict]: List of formatted messages in OpenAI format
-
-        Raises:
-            ValueError: If messages are invalid or missing required fields
-            TypeError: If unsupported message types are provided
-
-        Examples:
-            >>> msgs = [
-            ...     Message.system_message("You are a helpful assistant"),
-            ...     {"role": "user", "content": "Hello"},
-            ...     Message.user_message("How are you?")
-            ... ]
-            >>> formatted = LLM.format_messages(msgs)
-        """
         formatted_messages = []
 
         for message in messages:
             if isinstance(message, dict):
-                # If message is already a dict, ensure it has required fields
                 if "role" not in message:
                     raise ValueError("Message dict must contain 'role' field")
                 formatted_messages.append(message)
             elif isinstance(message, Message):
-                # If message is a Message object, convert it to dict
                 formatted_messages.append(message.to_dict())
             else:
                 raise TypeError(f"Unsupported message type: {type(message)}")
 
-        # Validate all messages have required fields
         for msg in formatted_messages:
             if msg["role"] not in ["system", "user", "assistant", "tool"]:
                 raise ValueError(f"Invalid role: {msg['role']}")
@@ -98,25 +77,7 @@ class LLM:
         stream: bool = True,
         temperature: Optional[float] = None,
     ) -> str:
-        """
-        Send a prompt to the LLM and get the response.
-
-        Args:
-            messages: List of conversation messages
-            system_msgs: Optional system messages to prepend
-            stream (bool): Whether to stream the response
-            temperature (float): Sampling temperature for the response
-
-        Returns:
-            str: The generated response
-
-        Raises:
-            ValueError: If messages are invalid or response is empty
-            OpenAIError: If API call fails after retries
-            Exception: For unexpected errors
-        """
         try:
-            # Format system and user messages
             if system_msgs:
                 system_msgs = self.format_messages(system_msgs)
                 messages = system_msgs + self.format_messages(messages)
@@ -124,7 +85,6 @@ class LLM:
                 messages = self.format_messages(messages)
 
             if not stream:
-                # Non-streaming request
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -136,7 +96,6 @@ class LLM:
                     raise ValueError("Empty or invalid response from LLM")
                 return response.choices[0].message.content
 
-            # Streaming request
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -151,7 +110,7 @@ class LLM:
                 collected_messages.append(chunk_message)
                 print(chunk_message, end="", flush=True)
 
-            print()  # Newline after streaming
+            print()
             full_response = "".join(collected_messages).strip()
             if not full_response:
                 raise ValueError("Empty response from streaming LLM")
@@ -181,45 +140,21 @@ class LLM:
         temperature: Optional[float] = None,
         **kwargs,
     ):
-        """
-        Ask LLM using functions/tools and return the response.
-
-        Args:
-            messages: List of conversation messages
-            system_msgs: Optional system messages to prepend
-            timeout: Request timeout in seconds
-            tools: List of tools to use
-            tool_choice: Tool choice strategy
-            temperature: Sampling temperature for the response
-            **kwargs: Additional completion arguments
-
-        Returns:
-            ChatCompletionMessage: The model's response
-
-        Raises:
-            ValueError: If tools, tool_choice, or messages are invalid
-            OpenAIError: If API call fails after retries
-            Exception: For unexpected errors
-        """
         try:
-            # Validate tool_choice
             if tool_choice not in ["none", "auto", "required"]:
                 raise ValueError(f"Invalid tool_choice: {tool_choice}")
 
-            # Format messages
             if system_msgs:
                 system_msgs = self.format_messages(system_msgs)
                 messages = system_msgs + self.format_messages(messages)
             else:
                 messages = self.format_messages(messages)
 
-            # Validate tools if provided
             if tools:
                 for tool in tools:
                     if not isinstance(tool, dict) or "type" not in tool:
                         raise ValueError("Each tool must be a dict with 'type' field")
 
-            # Set up the completion request
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -231,7 +166,6 @@ class LLM:
                 **kwargs,
             )
 
-            # Check if response is valid
             if not response.choices or not response.choices[0].message:
                 print(response)
                 raise ValueError("Invalid or empty response from LLM")

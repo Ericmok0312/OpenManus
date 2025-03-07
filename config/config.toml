@@ -1,0 +1,13 @@
+# Global LLM configuration
+[llm]
+model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+base_url = "https://api.openai.com/v1"
+api_key = "e22fbfe0e408b744e1b587dab3586f4f3bc3fd25a71ed4c7282ad6e428ef030b"
+max_tokens = 4096
+temperature = 0.0
+
+# Optional configuration for specific LLM models
+[llm.vision]
+model = "claude-3-5-sonnet"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-..."
